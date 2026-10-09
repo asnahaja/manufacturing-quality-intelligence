@@ -1,0 +1,33 @@
+
+# Python cache files
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+
+# Virtual environments
+.venv/
+venv/
+
+# Raw dataset files
+data/raw/*
+!data/raw/.gitkeep
+
+# Processed data
+data/processed/*
+!data/processed/.gitkeep
+
+# Trained model binaries
+models/*.pkl
+models/*.h5
+models/*.keras
+
+# MLflow tracking data
+mlruns/
+mlflow.db
+
+# Environment variables and secrets
+.env
+
+# Operating system and editor files
+.DS_Store
+.vscode/
