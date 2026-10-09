@@ -6,7 +6,6 @@ import numpy as np
 import pandas as pd
 
 
-
 # 1. PROJECT PATHS
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -599,3 +598,167 @@ cm_anomaly = confusion_matrix(
 
 print("\nAnomaly Confusion Matrix:")
 print(cm_anomaly)
+
+
+# 31. QUALITY MODEL TRAINING WITH MLFLOW
+
+with mlflow.start_run(run_name="quality_pass_ann"):
+
+    # Build a fresh neural network for quality prediction
+    quality_model = build_model(
+        input_dim=X_train_processed.shape[1]
+    )
+
+    quality_model.compile(
+        optimizer="adam",
+        loss="binary_crossentropy",
+        metrics=[
+            "accuracy",
+            keras.metrics.Precision(name="precision"),
+            keras.metrics.Recall(name="recall")
+        ]
+    )
+
+    # Log model configuration
+    mlflow.log_param("target", "quality_pass")
+    mlflow.log_param("model_type", "Artificial Neural Network")
+    mlflow.log_param("optimizer", "adam")
+    mlflow.log_param("loss", "binary_crossentropy")
+    mlflow.log_param("input_features", X_train_processed.shape[1])
+    mlflow.log_param("epochs", 30)
+    mlflow.log_param("batch_size", 32)
+
+    # Train the model
+    history_quality = quality_model.fit(
+        X_train_processed,
+        y_train_quality,
+        validation_split=0.20,
+        epochs=30,
+        batch_size=32,
+        class_weight=quality_weights,
+        verbose=1
+    )
+
+    # Log final training and validation metrics
+    quality_metrics = history_quality.history
+
+    mlflow.log_metric(
+        "final_train_loss",
+        quality_metrics["loss"][-1]
+    )
+    mlflow.log_metric(
+        "final_train_accuracy",
+        quality_metrics["accuracy"][-1]
+    )
+    mlflow.log_metric(
+        "final_train_precision",
+        quality_metrics["precision"][-1]
+    )
+    mlflow.log_metric(
+        "final_train_recall",
+        quality_metrics["recall"][-1]
+    )
+    mlflow.log_metric(
+        "final_val_loss",
+        quality_metrics["val_loss"][-1]
+    )
+    mlflow.log_metric(
+        "final_val_accuracy",
+        quality_metrics["val_accuracy"][-1]
+    )
+
+    print("\nQuality model training metrics logged.")
+
+    # Save the trained model
+    quality_model_path = (
+        MODELS_DIR / "quality_prediction_model.keras"
+    )
+
+    quality_model.save(quality_model_path)
+
+    mlflow.log_artifact(str(quality_model_path))
+
+    print("\nQuality model saved:")
+    print(quality_model_path)
+
+
+# 32. QUALITY MODEL TEST PREDICTIONS
+
+quality_probabilities = quality_model.predict(
+    X_test_processed,
+    verbose=0
+)
+
+quality_predictions = (
+    quality_probabilities >= 0.5
+).astype(int).ravel()
+
+
+# 33. QUALITY MODEL EVALUATION
+
+print("\nManufacturing Quality Prediction Evaluation:")
+
+print(
+    "Accuracy:",
+    accuracy_score(y_test_quality, quality_predictions)
+)
+print(
+    "Precision:",
+    precision_score(
+        y_test_quality,
+        quality_predictions,
+        zero_division=0
+    )
+)
+print(
+    "Recall:",
+    recall_score(
+        y_test_quality,
+        quality_predictions,
+        zero_division=0
+    )
+)
+print(
+    "F1 Score:",
+    f1_score(
+        y_test_quality,
+        quality_predictions,
+        zero_division=0
+    )
+)
+
+print("\nClassification Report:")
+print(
+    classification_report(
+        y_test_quality,
+        quality_predictions,
+        labels=[0, 1],
+        target_names=["Quality Fail", "Quality Pass"],
+        zero_division=0
+    )
+)
+
+cm_quality = confusion_matrix(
+    y_test_quality,
+    quality_predictions,
+    labels=[0, 1]
+)
+
+print("\nQuality Confusion Matrix:")
+print(cm_quality)
+
+
+# 34. DISPLAY QUALITY CONFUSION MATRIX
+
+import matplotlib.pyplot as plt
+from sklearn.metrics import ConfusionMatrixDisplay
+
+display = ConfusionMatrixDisplay(
+    confusion_matrix=cm_quality,
+    display_labels=["Quality Fail", "Quality Pass"]
+)
+
+display.plot(cmap="Blues", values_format="d")
+plt.title("Manufacturing Quality Prediction - Confusion Matrix")
+plt.tight_layout()
+plt.show()
