@@ -1,0 +1,22 @@
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY backend/requirements.txt backend/requirements.txt
+RUN pip install --no-cache-dir -r backend/requirements.txt
+
+COPY backend/ backend/
+COPY models/ models/
+
+EXPOSE 8000
+
+CMD ["python", "-m", "uvicorn", "main:app", "--app-dir", "backend", "--host", "0.0.0.0", "--port", "8000"]
+
+
+# FROM chooses a Python environment.
+# WORKDIR sets the working directory inside the container.
+# COPY copies the backend code, dependencies, and saved models into the container.
+# RUN pip install installs the backend requirements.
+# EXPOSE 8000 documents the port used by FastAPI.
+# CMD starts the API when the container runs.
