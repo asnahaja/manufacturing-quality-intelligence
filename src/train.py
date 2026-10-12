@@ -4,6 +4,207 @@
 from pathlib import Path
 import numpy as np
 import pandas as pd
+import sys
+
+
+
+# COMPARISON-ONLY MODE
+# Run with: python src/train.py --compare
+
+if "--compare" in sys.argv:
+    from pathlib import Path
+
+    import joblib
+    import mlflow
+    import numpy as np
+    import pandas as pd
+    import tensorflow as tf
+
+    from sklearn.model_selection import train_test_split
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.ensemble import RandomForestClassifier
+    from sklearn.metrics import (
+        accuracy_score,
+        precision_score,
+        recall_score,
+        f1_score,
+        roc_auc_score,
+    )
+
+    PROJECT_ROOT = Path(__file__).resolve().parents[1]
+    DATA_PATH = (
+        PROJECT_ROOT
+        / "data"
+        / "raw"
+        / "manufacturing_quality_intelligence.csv"
+    )
+    MODELS_DIR = PROJECT_ROOT / "models"
+    REPORTS_DIR = PROJECT_ROOT / "reports"
+    REPORTS_DIR.mkdir(exist_ok=True)
+
+    # Use the same MLflow database and experiment.
+    mlflow.set_tracking_uri(
+        f"sqlite:///{(PROJECT_ROOT / 'mlflow.db').as_posix()}"
+    )
+    mlflow.set_experiment("Manufacturing Quality Intelligence")
+
+    TARGETS = [
+        "machine_failure",
+        "is_anomaly",
+        "quality_pass",
+    ]
+
+    MODEL_PATHS = {
+        "machine_failure": MODELS_DIR / "machine_failure_model.keras",
+        "is_anomaly": MODELS_DIR / "anomaly_detection_model.keras",
+        "quality_pass": MODELS_DIR / "quality_prediction_model.keras",
+    }
+
+    # Load the data and recreate the original split.
+    df = pd.read_csv(DATA_PATH)
+    df["timestamp"] = pd.to_datetime(
+        df["timestamp"], format="%d-%m-%Y %H:%M"
+    )
+
+    df["hour"] = df["timestamp"].dt.hour
+    df["day"] = df["timestamp"].dt.day
+    df["month"] = df["timestamp"].dt.month
+    df["day_of_week"] = df["timestamp"].dt.dayofweek
+    df = df.drop(columns=["timestamp"])
+
+    X = df.drop(
+        columns=TARGETS + ["reading_id", "maintenance_due"]
+    )
+    y = df[TARGETS]
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.20, random_state=42
+    )
+
+    preprocessor = joblib.load(MODELS_DIR / "preprocessor.pkl")
+
+    X_train_processed = preprocessor.transform(X_train)
+    X_test_processed = preprocessor.transform(X_test)
+
+    if hasattr(X_train_processed, "toarray"):
+        X_train_processed = X_train_processed.toarray()
+        X_test_processed = X_test_processed.toarray()
+
+    print("Training shape:", X_train_processed.shape)
+    print("Testing shape:", X_test_processed.shape)
+
+    results = []
+
+    def evaluate(target, algorithm, probabilities, y_true):
+        predictions = (probabilities >= 0.5).astype(int)
+
+        metrics = {
+            "accuracy": accuracy_score(y_true, predictions),
+            "precision": precision_score(
+                y_true, predictions, zero_division=0
+            ),
+            "recall": recall_score(
+                y_true, predictions, zero_division=0
+            ),
+            "f1_score": f1_score(
+                y_true, predictions, zero_division=0
+            ),
+            "roc_auc": roc_auc_score(y_true, probabilities),
+        }
+
+        with mlflow.start_run(
+            run_name=f"comparison_{target}_{algorithm.lower().replace(' ', '_')}"
+        ):
+            mlflow.log_params({
+                "target": target,
+                "algorithm": algorithm,
+                "evaluation": "held-out test set",
+                "threshold": 0.5,
+                "random_state": 42,
+            })
+            mlflow.log_metrics(metrics)
+
+        results.append({
+            "target": target,
+            "algorithm": algorithm,
+            **metrics,
+        })
+
+        print(
+            f"{target} | {algorithm} | "
+            + " | ".join(
+                f"{name}={value:.4f}"
+                for name, value in metrics.items()
+            )
+        )
+
+    # Evaluate the existing ANN, then train two additional algorithms.
+    for target in TARGETS:
+        print(f"\n--- {target} ---")
+        y_train_target = y_train[target].to_numpy()
+        y_test_target = y_test[target].to_numpy()
+
+        ann = tf.keras.models.load_model(
+            MODEL_PATHS[target], compile=False
+        )
+        ann_probabilities = ann.predict(
+            X_test_processed, verbose=0
+        ).ravel()
+
+        evaluate(target, "ANN", ann_probabilities, y_test_target)
+
+        logistic = LogisticRegression(
+            max_iter=1000,
+            class_weight="balanced",
+            random_state=42,
+        )
+        logistic.fit(X_train_processed, y_train_target)
+        evaluate(
+            target,
+            "Logistic Regression",
+            logistic.predict_proba(X_test_processed)[:, 1],
+            y_test_target,
+        )
+
+        forest = RandomForestClassifier(
+            n_estimators=200,
+            class_weight="balanced",
+            random_state=42,
+            n_jobs=-1,
+        )
+        forest.fit(X_train_processed, y_train_target)
+        # Save the selected Random Forest models
+        if target == "machine_failure":
+            joblib.dump(
+                forest,
+                MODELS_DIR / "machine_failure_random_forest.pkl"
+            )
+
+        elif target == "quality_pass":
+            joblib.dump(
+                forest,
+                MODELS_DIR / "quality_prediction_random_forest.pkl"
+            )
+        evaluate(
+            target,
+            "Random Forest",
+            forest.predict_proba(X_test_processed)[:, 1],
+            y_test_target,
+        )
+
+    comparison = pd.DataFrame(results).sort_values(
+        ["target", "f1_score"],
+        ascending=[True, False],
+    )
+
+    output_path = REPORTS_DIR / "algorithm_comparison.csv"
+    comparison.to_csv(output_path, index=False)
+
+    print("\n=== ALGORITHM COMPARISON ===")
+    print(comparison.to_string(index=False))
+    print(f"\nSaved comparison to: {output_path}")
+
+    sys.exit(0)
 
 
 # 1. PROJECT PATHS
@@ -64,10 +265,16 @@ ID_COLUMNS = [
     "reading_id"
 ]
 
+EXCLUDED_FEATURE_COLUMNS = (
+    TARGET_COLUMNS
+    + ID_COLUMNS
+    + ["maintenance_due"]
+)
+
 FEATURE_COLUMNS = [
     column
     for column in df.columns
-    if column not in TARGET_COLUMNS + ID_COLUMNS
+    if column not in EXCLUDED_FEATURE_COLUMNS
 ]
 
 X = df[FEATURE_COLUMNS]
@@ -322,7 +529,7 @@ with mlflow.start_run(run_name="machine_failure_ann"):
         "final_val_accuracy",
         final_metrics["val_accuracy"][-1]
     )
-
+    
     print("\nTraining metrics logged to MLflow.")
 
 
@@ -338,6 +545,15 @@ with mlflow.start_run(run_name="machine_failure_ann"):
 
     print("\nFailure model saved:")
     print(failure_model_path)
+
+
+    # MODEL REGISTRY
+    mlflow.tensorflow.log_model(
+        model=failure_model,
+        name="machine_failure_model",
+        registered_model_name="ManufacturingMachineFailure"
+    )
+    
 
 
 # 20. MACHINE FAILURE TEST PREDICTIONS
@@ -549,6 +765,15 @@ with mlflow.start_run(run_name="is_anomaly_ann"):
     print(anomaly_model_path)
 
 
+    # MODEL REGISTRY
+
+    mlflow.tensorflow.log_model(
+    model=anomaly_model,
+    name="anomaly_detection_model",
+    registered_model_name="ManufacturingAnomalyDetection"
+)
+
+
 # 29. ANOMALY TEST PREDICTIONS
 
 anomaly_probabilities = anomaly_model.predict(
@@ -680,6 +905,15 @@ with mlflow.start_run(run_name="quality_pass_ann"):
 
     print("\nQuality model saved:")
     print(quality_model_path)
+
+
+    # MODEL REGISTRY
+
+    mlflow.tensorflow.log_model(
+        model=quality_model,
+        name="quality_prediction_model",
+        registered_model_name="ManufacturingQualityPrediction"
+    )
 
 
 # 32. QUALITY MODEL TEST PREDICTIONS

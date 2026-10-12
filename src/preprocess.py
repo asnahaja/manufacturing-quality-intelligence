@@ -70,13 +70,19 @@ TARGET_COLUMNS = [
 print("\nTarget Columns:")
 print(TARGET_COLUMNS)
 
+EXCLUDED_FEATURE_COLUMNS = (
+    TARGET_COLUMNS
+    + ID_COLUMNS
+    + ["maintenance_due"]
+)
+
 
 # 7. SEPARATE FEATURES AND TARGETS
 
 FEATURE_COLUMNS = [
     column
     for column in df.columns
-    if column not in TARGET_COLUMNS + ID_COLUMNS
+    if column not in EXCLUDED_FEATURE_COLUMNS
 ]
 
 X = df[FEATURE_COLUMNS]
